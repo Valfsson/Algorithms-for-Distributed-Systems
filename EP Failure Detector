@@ -30,7 +30,6 @@ class EPFD(epfdInit: Init[EPFD]) extends ComponentDefinition {
   //EPFD event handlers
   ctrl uponEvent {
     case _: Start =>  {
-      /* WRITE YOUR CODE HERE  */
      startTimer(period);
     }
   }
@@ -38,23 +37,15 @@ class EPFD(epfdInit: Init[EPFD]) extends ComponentDefinition {
   timer uponEvent {
     case CheckTimeout(_) =>  {
       if (!alive.intersect(suspected).isEmpty) {
-          
-        //delay := delay + ∆
-        period= period + period;
-        
+        period= period + delay;        
       }
       
-      seqnum = seqnum + 1;
-      
+      seqnum = seqnum + 1;      
       for (p <- topology) {
         if (!alive.contains(p) && !suspected.contains(p)) {
-            
-           // suspected := suspected ∪ {p}
             suspected = suspected + p;
-           //trigger h ♦P, Suspect | p i
             trigger(Suspect(p) -> epfd);
-          
-           
+                   
         } else if (alive.contains(p) && suspected.contains(p)) {
           suspected = suspected - p;
           trigger(Restore(p) -> epfd);
@@ -68,14 +59,10 @@ class EPFD(epfdInit: Init[EPFD]) extends ComponentDefinition {
 
   pLink uponEvent {
     case PL_Deliver(src, HeartbeatRequest(seq)) =>  {
-     // trigger < pp2p, Send | p, [HeartbeatReply, n] >
-      trigger(PL_Send(src, HeartbeatReply(seq)) -> pLink);
-     
+      trigger(PL_Send(src, HeartbeatReply(seq)) -> pLink);     
     }
     case PL_Deliver(src, HeartbeatReply(seq)) => {
-      // if n = seqnum ∨ p ∈ suspected then
       if (seq==seqnum || suspected.contains(src)){
-           //alive := alive ∪ {p}
           alive=alive + src;
       }
     }
