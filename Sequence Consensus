@@ -30,7 +30,7 @@ object Role extends Enumeration {
 def suffix(s: List[RSM_Command], l: Int): List[RSM_Command] = {
     s.drop(l)
 }
-
+ 
 def prefix(s: List[RSM_Command], l: Int): List[RSM_Command] = {
     s.take(l)
 }
