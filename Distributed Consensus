@@ -1,0 +1,128 @@
+//Implementation of Leader-less Obstraction-Free Paxos for Single Value Consensus
+
+class Paxos(paxosInit: Init[Paxos]) extends ComponentDefinition {
+
+  //Port Subscriptions for Paxos
+
+  val consensus = provides[Consensus];
+  val beb = requires[BestEffortBroadcast];
+  val plink = requires[PerfectLink];
+ 
+  //Internal State of Paxos
+  val (rank, numProcesses) = paxosInit match {
+    case Init(s: Address, qSize: Int) => (toRank(s), qSize)
+  }
+
+  //Proposer State
+  var round = 0;
+  var proposedValue: Option[Any] = None;
+  var promises: ListBuffer[((Int, Int), Option[Any])] = ListBuffer.empty;
+  var numOfAccepts = 0;
+  var decided = false;
+
+  //Acceptor State
+  var promisedBallot = (0, 0);
+  var acceptedBallot = (0, 0);
+  var acceptedValue: Option[Any] = None;
+
+  def propose() = {
+    if(!decided){
+      round +=1;
+      numOfAccepts = 0;
+      promises = ListBuffer.empty;
+      trigger (BEB_Broadcast (Prepare(round,rank)) ->beb );
+     // println(s"def: prepare ballot to beb: $round , $rank");
+  }
+  }
+
+  consensus uponEvent {
+    case C_Propose(value) => {
+   proposedValue=Some(value);
+   propose();
+    }
+  }
+
+
+  beb uponEvent {
+
+    case BEB_Deliver(src, prep: Prepare) => {
+   if(promisedBallot<prep.proposalBallot){
+     promisedBallot= prep.proposalBallot;
+     trigger (PL_Send (src, Promise(promisedBallot,acceptedBallot, acceptedValue)) ->plink );
+   } else{
+      trigger (PL_Send (src, Nack( prep.proposalBallot)) ->plink );
+   }
+   
+    };
+
+    case BEB_Deliver(src, acc: Accept) => {
+    if(promisedBallot<=acc.acceptBallot){
+         promisedBallot=acc.acceptBallot;
+         acceptedBallot=acc.acceptBallot;
+         acceptedValue=Some(acc.proposedValue);
+         trigger (PL_Send (src, Accepted(acc.acceptBallot)) ->plink );
+   } else{
+         trigger (PL_Send (src, Nack(acc.acceptBallot)) ->plink );
+   }
+    };
+
+    case BEB_Deliver(src, dec : Decided) => {
+   if(!decided){
+       trigger (C_Decide (dec.decidedValue) ->consensus);
+       println(s"beb: send decied to consensus: $dec.decidedValue");
+       decided=true;
+   }
+    }
+  }
+
+  plink uponEvent {
+
+    case PL_Deliver(src, prepAck: Promise) => {
+      if ((round, rank) == prepAck.promiseBallot) {
+        promises += ((prepAck.acceptedBallot, prepAck.acceptedValue));
+        var compare=((numProcesses/2)+1);
+        if(promises.size==compare){
+            println(s" list:  $promises");
+            val sorted=promises.toSeq.sortBy(_._1);
+           // println(s"sorted list by Ballot:  $sorted");
+            val firstEl=sorted(0);
+            var(firstElBallot, firstElValue)=firstEl;
+           // println(s"first value:  $firstEl");
+            if(firstElValue!= None){
+                proposedValue=firstElValue;
+                println(s"NEW proposedValue #118:  $proposedValue");
+            }     
+            else if(firstElValue== None){
+                  println(s"OLD proposedValue #118:  $proposedValue");
+                
+            }
+            trigger(BEB_Broadcast (Accept((round,rank), proposedValue.get))-> beb);
+             println(s"plink: send accept to beb: round: $round rank: $rank proposedValue: $proposedValue");
+        }
+
+      }
+    };
+    
+    case PL_Deliver(src, accAck: Accepted) => {
+      if ((round, rank) == accAck.acceptedBallot) {
+         println(s"round: $round , rank: $rank from: $src:  ack # : $numOfAccepts");
+         println(s"processes: $numProcesses");
+        numOfAccepts+=1;
+        var compare= ((numProcesses/2)+1);
+         println(s"NEWround: $round , rank: $rank from: $src:  ack # : $numOfAccepts");
+          println(s"round: $round , rank: $rank from: $src:  compare # : $compare");
+        if( numOfAccepts== compare ){
+             trigger (BEB_Broadcast (Decided(proposedValue.get)) ->beb );
+             println(s"plink: decide ballot to beb: $proposedValue ");
+        }
+      }
+    };
+
+    case PL_Deliver(src, nack: Nack) => {
+      if ((round, rank) == nack.ballot) {
+        propose();
+      }
+    }
+  }
+ 
+};
