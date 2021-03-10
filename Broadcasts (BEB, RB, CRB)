@@ -1,0 +1,124 @@
+// Best-Effort Broadcast
+class BasicBroadcast(init: Init[BasicBroadcast]) extends ComponentDefinition {
+
+  //BasicBroadcast Subscriptions
+  val pLink = requires[PerfectLink];
+  val beb = provides[BestEffortBroadcast];
+
+  //BasicBroadcast Component State and Initialization
+  val (self, topology) = init match {
+    case Init(s: Address, t: Set[Address]@unchecked) => (s, t)
+  };  
+
+  //BasicBroadcast Event Handlers
+ beb uponEvent {
+   case x: BEB_Broadcast => {
+     val payload = x.payload;
+      topology.foreach{ p=>
+          trigger (PL_Send(p,  BEB_Broadcast (payload)) -> pLink );
+         println(s"beb:  Process $self BROADCAST message $payload and p is $p");
+
+      }
+    }
+  }
+
+  pLink uponEvent {
+    case PL_Deliver(src,BEB_Broadcast(payload)) => {
+        trigger(BEB_Deliver(src, payload) -> beb);
+          println(s"beb:  source  $src DELIVER message $payload");
+    }
+  }
+}
+
+
+
+
+//*******************************//
+// Reliable Broadcast
+
+class EagerReliableBroadcast(init: Init[EagerReliableBroadcast]) extends ComponentDefinition {
+  //EagerReliableBroadcast Subscriptions
+  val beb = requires[BestEffortBroadcast];
+  val rb = provides[ReliableBroadcast];
+
+  //EagerReliableBroadcast Component State and Initialization
+  val self = init match {
+    case Init(s: Address) => s
+  };
+  val delivered = collection.mutable.Set[KompicsEvent]();
+
+  //EagerReliableBroadcast Event Handlers
+  rb uponEvent {
+     case RB_Broadcast(payload) => {
+      trigger(BEB_Broadcast(payload) -> beb); 
+       println(s"rb:  source BROADCAST message $payload");
+    }
+  }
+
+  beb uponEvent {
+    case BEB_Deliver(src, payload) => {
+     if(!delivered.contains(payload)) { 
+        delivered +=payload;
+            trigger( RB_Deliver(src,  payload) -> rb); 
+            trigger((BEB_Broadcast(payload) -> beb));
+             println(s"rb:  source  $src DELIVERED message $payload");
+     }
+    }
+  }
+}
+
+
+
+//*******************************//
+//Causal-Order Reliable Broadcast
+
+case class DataMessage(timestamp: VectorClock, payload: KompicsEvent) extends KompicsEvent;
+
+class WaitingCRB(init: Init[WaitingCRB]) extends ComponentDefinition {
+
+  //WaitingCRB Subscriptions
+  val rb = requires[ReliableBroadcast];
+  val crb = provides[CausalOrderReliableBroadcast];
+
+  //WaitingCRB Component State and Initialization
+  val (self, vec) = init match {
+    case Init(s: Address, t: Set[Address]@unchecked) => (s, VectorClock.empty(t.toSeq))
+  };
+
+    // val V = VectorClock.empty(init match { case Init(_, t: Set[Address]) => t.toSeq })
+  var pending: ListBuffer[(Address, DataMessage)] = ListBuffer();
+  var lsn = 0;
+
+
+  //WaitingCRB Event Handlers
+  crb uponEvent {
+    case x: CRB_Broadcast => {
+     val m = x.payload;
+     var w= VectorClock(vec);
+      w.set(self,lsn);
+      lsn += 1;
+        val c= DataMessage(w,m);
+        trigger(RB_Broadcast(c) -> rb);
+    }
+  }
+
+  rb uponEvent {
+     case RB_Deliver(src: Address, msg: DataMessage) => {
+       var a= (src, msg);
+       pending += a;
+        println(s"=== pending list: $pending");
+
+    while (pending.exists(_._2.timestamp <= vec)) { 
+         
+        var item = pending.remove(pending.indexWhere(_._2.timestamp <= vec));
+            val (eAddress, eDM) = item;
+              println("found message to deliver!");
+             println(s"------->deleting $item item");
+             println(s"new list $pending");
+             vec.inc(eAddress);
+             trigger (CRB_Deliver(eAddress, eDM.payload)->crb);
+        
+    }
+    }   
+    }
+}
