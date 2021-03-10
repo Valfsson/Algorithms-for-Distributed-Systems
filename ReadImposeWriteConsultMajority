@@ -1,0 +1,113 @@
+// An atomic register that supports multiple writers and readers
+
+class ReadImposeWriteConsultMajority(init: Init[ReadImposeWriteConsultMajority]) extends ComponentDefinition {
+
+  //subscriptions
+  val nnar = provides[AtomicRegister];
+  val pLink = requires[PerfectLink];
+  val beb = requires[BestEffortBroadcast];
+
+  //state and initialization
+  val (self: Address, n: Int, selfRank: Int) = init match {
+    case Init(selfAddr: Address, n: Int) => (selfAddr, n, AddressUtils.toRank(selfAddr))
+  };
+
+  var (ts, wr) = (0, 0);
+  var value: Option[Any] = None; //val
+  var acks = 0;
+  var writeval: Option[Any] = None;
+  var rid = 0;
+  var readlist: Map[Address, (Int, Int, Option[Any])] = Map.empty;
+  var readval: Option[Any] = None;
+  var reading = false;
+
+  //handlers
+
+  nnar uponEvent {
+    case AR_Read_Request() => {
+      rid = rid + 1;
+      acks = 0;
+      readlist = Map.empty;
+      reading = true;
+      trigger (BEB_Broadcast (READ(rid)) ->beb ); 
+       println(s"nnar read: sends read req to beb: $rid");
+
+    };
+    case AR_Write_Request(wval) => { 
+      rid = rid + 1;
+      writeval=Some(wval);
+      acks = 0;
+      readlist = Map.empty;
+      trigger (BEB_Broadcast (READ(rid)) ->beb );
+      //println(s"nnar write: sends read req to beb: $rid");
+
+    }
+  }
+
+  beb uponEvent {
+    case BEB_Deliver(src, READ(readID)) => {
+    //println(s"beb:  read received  $readID");
+     trigger (PL_Send(src,VALUE(readID,ts,wr,value)) ->pLink );
+    //  println(s"beb: sends VALUE to plink: $readID, $ts, $wr, $value");
+    }
+     
+    case BEB_Deliver(src, w: WRITE) => {
+    if((w.ts,w.wr)>(ts,wr)){
+       ts=w.ts;
+       wr=w.wr;
+       value=w.writeVal;
+    }
+    trigger (PL_Send(src,ACK(w.rid)) ->pLink );
+   // println(s"beb: sends ack to plink: $w.rid");
+ 
+    }
+  }
+
+  pLink uponEvent {
+    case PL_Deliver(src, v: VALUE) => { 
+      if (v.rid == rid) {
+      readlist(src)=(v.ts,v.wr,v.value); 
+        if(readlist.size>(n/2)){
+            var size=readlist.size;
+            val sortedreadListNum=readlist.toSeq.sortBy(_._2._1);
+            //println(s"sorted list by number:  $sortedreadListNum");
+            val firstEl=sortedreadListNum(0);
+            var(_,(maxts,rr,readvalNew))=firstEl;
+            readval=readvalNew;
+            println(s"  maxts: $maxts , rr:  $rr ,readval: $readval");
+            readlist = Map.empty; 
+           var bcastval: Option[Any] = None;
+           
+            if(reading){
+                 bcastval= readval;
+                  println(s" NEW READVAL set: $readval");
+            }else{
+               maxts +=1;
+               rr=selfRank;
+               bcastval= writeval;
+            }
+             trigger (BEB_Broadcast (WRITE(rid,maxts,rr,bcastval)) ->beb );
+              println(s"pl: to beb: rid: $rid  maxts: $maxts , rr:  $rr ,bcastval: $bcastval");
+        }
+      }
+    }
+    
+    case PL_Deliver(src, v: ACK) => {
+      if (v.rid == rid) {
+      acks+=1;
+      if(acks>(n/2)){
+        acks=0;
+        if(reading){
+            reading=false;
+            trigger (AR_Read_Response(readval) ->nnar );
+            println(s"pl: to nnar. read resp: $readval");
+        }else{
+            trigger(AR_Write_Response()->nnar);
+                 println("pl: to nnar. WRITE resp");
+        }
+      }
+     
+      }
+    }
+  }
+}
