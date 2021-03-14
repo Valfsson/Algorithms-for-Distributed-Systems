@@ -63,37 +63,6 @@ class GossipLeaderElection(init: Init[GossipLeaderElection]) extends ComponentDe
   private def makeLeader(topProcess: (Long, Address)) {
   }
   
-  class GossipLeaderElection(init: Init[GossipLeaderElection]) extends ComponentDefinition {
-
-  val ble = provides[BallotLeaderElection];
-  val pl = requires[PerfectLink];
-  val timer = requires[Timer];
-
-  val self = init match {
-    case Init(s: Address) => s
-  }
-  val topology = cfg.getValue[List[Address]]("ble.simulation.topology");
-  val delta = cfg.getValue[Long]("ble.simulation.delay");
-  val majority = (topology.size / 2) + 1;
-
-  private var period = cfg.getValue[Long]("ble.simulation.delay");
-  private val ballots = mutable.Map.empty[Address, Long];
-
-  private var round = 0l;
-  private var ballot = ballotFromNAddress(0, self);
-
-  private var leader: Option[(Long, Address)] = None;
-  private var highestBallot: Long = ballot;
-
-  private def startTimer(delay: Long): Unit = {
-    val scheduledTimeout = new ScheduleTimeout(period);
-    scheduledTimeout.setTimeoutEvent(CheckTimeout(scheduledTimeout));
-    trigger(scheduledTimeout -> timer);
-  }
-
-  private def makeLeader(topProcess: (Long, Address)) {
-  }
-
   private def checkLeader() {
         ballots+=((self,ballot)) 
             println(s" list by long:  $ballots");
